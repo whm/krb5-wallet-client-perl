@@ -1,0 +1,9 @@
+                  krb5-wallet-client-perl To-Do List
+
+ * Use the remctl perl support to execute remctl commands instead of
+   shelling out to the command line.
+ * Current keytab downloads are treated the same as file downloads in
+   that they complete replace the target file.  For keytab downloads
+   the keytab should be added to the existing keytab file.
+ * The current package is Debian specific.  An upstream branch that
+   is suitable for uploading to CPAN should be created.

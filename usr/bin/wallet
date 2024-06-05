@@ -1,0 +1,736 @@
+#!/usr/bin/perl
+
+use Getopt::Long;
+use Pod::Usage;
+use IPC::Open3;
+use strict;
+
+my $opt_debug;
+my $opt_file;
+my $opt_help;
+my $opt_kprincipal;
+my $opt_manual;
+my $opt_port;
+my $opt_server;
+my $opt_version;
+
+my %VALID_TYPE = (
+    'file'     => 1,
+    'keytab'   => 1,
+    'password' => 1
+);
+
+my $WALLET_SERVER;
+my $WALLET_PORT;
+my $WALLET_PL_VERSION = 1.2;
+
+########################################################################
+# Subroutines
+########################################################################
+
+#------------------------------------------------------------
+# Display debugging output
+sub dbg {
+    my ($txt) = @_;
+    if ($opt_debug) {
+        print("DEBUG: $txt\n");
+    }
+    return;
+}
+
+# ----------------------------------------------------------------------
+# Fork a shell command line and send the output to the parent process
+
+sub fork_cmd {
+    my ($timeout, @cmd) = @_;
+
+    my $pid;
+    eval {
+        alarm $timeout;
+        # write to parent STDOUT and STDERR
+        $pid = open3(my $chld_in, '>&STDOUT', '>&STDERR', @cmd);
+        # retrieve exit status when child finishes
+        waitpid($pid, 0);
+        my $child_exit_status = $? >> 8;
+        alarm 0;
+    };
+    if ($@) {
+        if ($pid) {
+            kill 9, $pid;
+        }
+        my $err .= "ERROR executing command\n";
+        $err .= $@;
+        die "$err\n";
+    }
+    if ($opt_debug) {
+        dbg("Command complete");
+    }
+    return;
+}
+
+#------------------------------------------------------------
+# Read the krb5.conf file and extract the wallet server
+sub read_krb5_conf {
+    my $krb_conf = '/etc/krb5.conf';
+    if (!-e $krb_conf) {
+        $krb_conf = 'C:/ProgramData/Kerberos/krb5.conf';
+    }
+    if (-e $krb_conf && (!$WALLET_SERVER || !$WALLET_PORT)) {
+        open(my $fh, '<', $krb_conf)
+          or die("ERROR: problem reading $krb_conf\n");
+        while (<$fh>) {
+            chomp;
+            my $inline = $_;
+            if (  !$WALLET_SERVER
+                && $inline =~ /wallet_server \s* = \s* (\S+)/xms)
+            {
+                $WALLET_SERVER = $1;
+                dbg("krb5.conf server: $WALLET_SERVER");
+                next;
+            }
+            if (  !$WALLET_PORT
+                && $inline =~ /wallet_port \s* = \s* (\d+)/xms)
+            {
+                $WALLET_PORT = $1;
+                dbg("krb5.conf port: $WALLET_PORT");
+            }
+        }
+        close($fh) or die("ERROR: problem closing $krb_conf\n");
+    }
+    return;
+}
+
+#------------------------------------------------------------
+# Read a file and return the contents
+sub read_file {
+    my ($filename) = @_;
+    if ($opt_debug) {
+        dbg("Opening $filename");
+    }
+    open(my $fh, '<', $filename) or die("Problem reading $filename: $!\n");
+    my $z;
+    while (<$fh>) {
+        $z .= $_;
+        if ($opt_debug) {
+            dbg("z:$z");
+        }
+    }
+    close($fh) or die("Problem closing $filename: $!\n");
+    return $z;
+}
+
+sub get_object {
+    my ($type, $obj_id) = @_;
+    my $cmd = "remctl -p $WALLET_PORT $WALLET_SERVER wallet get $type $obj_id";
+    dbg("cmd: $cmd");
+    my $data = `$cmd`;
+    if ($opt_file) {
+        open(my $fh, '>', $opt_file)
+          or die("ERROR: problem writing to $opt_file\n");
+        print $fh $data or die("ERROR: output to $opt_file failed\n");
+        close($fh)      or die("ERROR: problem closing $opt_file\n");
+    } else {
+        print $data or die("ERROR: problem writing to STDOUT\n");
+    }
+    return;
+}
+
+sub rekey_keytab {
+    print "rekey_keytab not yet implemented\n";
+}
+
+sub store_file {
+    my ($type, $obj_id, $data) = @_;
+    my @cmd
+      = ('remctl', $WALLET_SERVER, 'wallet', 'store', $type, $obj_id, $data);
+    fork_cmd(30, @cmd);
+    return;
+}
+
+sub run_wallet_command {
+    my @args = @_;
+    my $cmd  = "remctl -p $WALLET_PORT $WALLET_SERVER wallet ";
+    $cmd .= join(' ', @args);
+    dbg("cmd: $cmd\n");
+    print(`$cmd`);
+    return;
+}
+
+########################################################################
+# Main routine
+########################################################################
+
+# -- get options
+GetOptions(
+    'debug'    => \$opt_debug,
+    'file=s'   => \$opt_file,
+    'help'     => \$opt_help,
+    'manual'   => \$opt_manual,
+    'server=s' => \$opt_server,
+    'version'  => \$opt_version
+);
+
+# -- Flush output immediately
+local $| = 1;
+
+my $action = shift;
+
+if ($opt_version) {
+    print("version:$WALLET_PL_VERSION\n");
+    exit 1;
+}
+
+# Display help if requested
+if ($opt_manual || $action eq 'manual') {
+    pod2usage(-verbose => 3);
+}
+if ($opt_help || scalar(@ARGV) == 0 || $action eq 'help') {
+    pod2usage(-verbose => 0);
+}
+
+# Set server and port
+if ($opt_server) {
+    $WALLET_SERVER = $opt_server;
+}
+if ($opt_port) {
+    $WALLET_PORT = $opt_port;
+}
+read_krb5_conf();
+if (!$WALLET_SERVER) {
+    die("no server specified in krb5.conf or with --server");
+}
+if (!$WALLET_PORT) {
+    $WALLET_PORT = 4373;
+}
+dbg("WALLET_SERVER: $WALLET_SERVER");
+dbg("WALLET_PORT: $WALLET_PORT");
+
+# --file is only supported for get and store and -S with get keytab
+if ($opt_file) {
+    if ($action ne 'get' && $action ne 'store') {
+        die("--file only supported for get and store");
+    }
+}
+
+if ($action eq 'get') {
+    if (scalar(@ARGV) > 2) {
+        die("too many arguments");
+    }
+    my $type = shift;
+    if (!$VALID_TYPE{$type}) {
+        die("ERROR: invalid type '$type'");
+    }
+    my $obj = shift;
+    get_object($type, $obj);
+} elsif ($action eq 'rekey') {
+    if (scalar(@ARGV) > 1) {
+        die("ERROR: too many arguments");
+    }
+    my $keytab_file = shift;
+    rekey_keytab($keytab_file);
+} elsif ($action eq 'store') {
+    my $type = shift;
+    my $obj  = shift;
+    my $data;
+    if (!$VALID_TYPE{$type}) {
+        die("ERROR: invalid type '$type'");
+    }
+    if ($ARGV[0]) {
+        $data = shift;
+    } elsif ($opt_file) {
+        if (!-e $opt_file) {
+            die("$opt_file not found");
+        }
+        $data = read_file($opt_file);
+    }
+    if (scalar(@ARGV) > 0) {
+        die("too many arguments");
+    }
+    store_file($type, $obj, $data);
+} else {
+    run_wallet_command($action, @ARGV);
+}
+
+exit;
+
+__END__
+
+=head1 NAME
+
+wallet - this is a wallet client written in perl
+
+=head1 SYNOPSIS
+
+    wallet [options] <command> <type> <name> [<arg> ...]
+
+=head1 DESCRIPTION
+
+This script is a wallet client that is written in perl that assumes
+that remctl is available as a command line application.  This script
+is useful on any system that has perl and remctl.  The script has been
+tested on Linux, OS X, and Windows 10.  The rest of this documentation
+is largely taken from the wallet-client man page distributed by Russ
+Allbery <eagle@eyrie.org>.
+
+wallet is a client for the wallet system, which stores or creates
+secure information such as Kerberos keytabs, associates them with ACLs
+and other metadata, and allows clients to view and download them.
+This client provides the user interface to the wallet system for both
+users and wallet administrators.
+
+The wallet command-line client takes a command and optional arguments
+on the command line, authenticates to the wallet server using
+Kerberos, and sends that command and arguments to server.  It then
+reads the results and displays them to the user or stores them in a
+file.  The client itself does not know which commands are valid and
+which aren't; apart from some special handling of particular commands,
+it sends all commands to the server to respond to appropriately.  This
+allows additional commands to be added to the wallet system without
+changing all of the clients.
+
+The primary commands of the wallet system are "get", which retrieves
+some secure data from the wallet, "store", which stores some secure
+data in the wallet, and "show", which stores the metadata about an
+object stored in the wallet.  Each object in the wallet has a type,
+which determines what data the object represents and may determine
+special handling when downloading or storing that object, and a name.
+For example, a wallet object for the "host/example.com" Kerberos
+keytab would have a type of "keytab" and a name of "host/example.com".
+The meaning of the name is specific to each type of object.
+
+Most other wallet commands besides those three are only available to
+wallet administrators.  The exception is attribute commands; see
+ATTRIBUTES.  The other commands allow setting ownership and ACLs on
+objects, creating and destroying objects, creating and destroying
+ACLs, and adding and removing entries from ACLs.  An ACL consists of
+one or more entries, each of which is a scheme and an identifier.  A
+scheme specifies a way of checking whether a user is authorized.  An
+identifier is some data specific to the scheme that specifies which
+users are authorized.  For example, for the "krb5" scheme, the
+identifier is a principal name and only that principal is authorized
+by that ACL entry.
+
+To run the wallet command-line client, you must already have a
+Kerberos ticket.  You can obtain a Kerberos ticket with kinit and see
+your current Kerberos tickets with klist.  The wallet client uses the
+remctl protocol to talk to the wallet server.
+
+=head1 OPTIONS
+
+=over 4
+
+=item -c command
+
+The command prefix (remctl type) to use.  Normally this is an internal
+implementation detail and the default ("wallet") should be fine.  It
+may sometimes be useful to use a different prefix for testing a
+different version of the wallet code on the server.  This option can
+also be set in krb5.conf; see CONFIGURATION below.
+
+=item -f file
+
+This flag is only used in combination with the "get" and "store"
+commands.  For "get", rather than sending the secure data to standard
+output (the default), the secure data will be stored in file.  For
+"store", the data to be stored will be read from file.
+
+With "get", if the object being retrieved is not a keytab object, any
+current file named output is renamed to outout.bak before the new file
+is created.  outout.new is used as a temporary file and any existing
+file with that name will be deleted.
+
+If the object being retrieved is a keytab object and the file output
+already exists, the downloaded keys will be added to the existing
+keytab file output.  Old keys are not removed; you may wish to run
+"kadmin ktremove" or an equivalent later to clean up old keys.
+output.new is still used as a temporary file and any existing file
+with that name will be deleted.
+
+=item -k principal
+
+The service principal of the wallet server.  The default is to use the
+"host" principal for the wallet server.  The principal chosen must
+match one of the keys in the keytab used by remctld on the wallet
+server.  This option can also be set in krb5.conf; see CONFIGURATION
+below.
+
+=item -h
+
+Display a brief summary of options and exit.  All other valid options
+and commands are ignored.
+
+=item -p port
+
+The port to connect to on the wallet server.  The default is the
+default remctl port.  This option can also be set in krb5.conf; see
+CONFIGURATION below.
+
+=item  -s server
+
+The wallet server to connect to.  The default may be set when
+compiling the wallet client.  If it isn't, either -s must be given or
+the server must be set in krb5.conf.  See CONFIGURATION below.
+
+=item  -v
+
+Display the version of the wallet client and exit.  All other valid
+options and commands are ignored.
+
+=back
+
+=head1 COMMANDS
+
+As mentioned above, most commands are only available to wallet
+administrators.  The exceptions are "acl check", "check", "get",
+"store", "show", "destroy", "flag clear", "flag set", "getattr",
+"setattr", and "history".  "acl check" and "check" can be run by
+anyone.  All of the rest of those commands have their own ACLs except
+"getattr" and "history", which use the "show" ACL, "setattr", which
+uses the "store" ACL, and "comment", which uses the owner or "show"
+ACL depending on whether one is setting or retrieving the comment.  If
+the appropriate ACL is set, it alone is checked to see if the user has
+access.  Otherwise, "destroy", "get", "store", "show", "getattr",
+"setattr", "history", and "comment" access is permitted if the user is
+authorized by the owner ACL of the object.
+
+Administrators can run any command on any object or ACL except for
+"get" and "store".  For "get" and "store", they must still be
+authorized by either the appropriate specific ACL or the owner ACL.
+
+If the locked flag is set on an object, no commands can be run on that
+object that change data except the "flags" commands, nor can the "get"
+command be used on that object.  "show", "history", "getacl",
+"getattr", and "owner", "expires", or "comment" without an argument
+can still be used on that object.
+
+For more information on attributes, see ATTRIBUTES.
+
+=over 4
+
+=item acl add <id> <scheme> <identifier>
+
+Add an entry with <scheme> and <identifier> to the ACL <id>.  <id>
+may be either the name of an ACL or its numeric identifier.
+
+=item acl check <id>
+
+Check whether an ACL with the ID <id> already exists.  If it does,
+prints "yes"; if not, prints "no".
+
+=item acl create <name>
+
+Create a new, empty ACL with name <name>.  When setting an ACL on an
+object with a set of entries that don't match an existing ACL, first
+create a new ACL with "acl create", add the appropriate entries to it
+with "acl add", and then set the ACL on an object with the "owner" or
+"setacl" commands.
+
+=item acl destroy <id>
+
+Destroy the ACL <id>.  This ACL must no longer be referenced by any
+object or the ACL destruction will fail.  The special ACL named
+"ADMIN" cannot be destroyed.
+
+=item acl history <id>
+
+Display the history of the ACL <id>.  Each change to the ACL (not
+including changes to the name of the ACL) will be represented by two
+lines.  The first line will have a timestamp of the change followed by
+a description of the change, and the second line will give the user
+who made the change and the host from which the change was made.
+
+=item acl remove <id> <scheme> <identifier>
+
+Remove the entry with <scheme> and <identifier> from the ACL <id>.
+<id> may be either the name of an ACL or its numeric identifier.  The
+last entry in the special ACL "ADMIN" cannot be removed to protect
+against accidental lockout, but administrators can remove themselves
+from the "ADMIN" ACL and can leave only a non- functioning entry on
+the ACL.  Use caution when removing entries from the "ADMIN" ACL.
+
+=item acl rename <id> <name>
+
+Renames the ACL identified by <id> to <name>.  This changes the
+human-readable name, not the underlying numeric ID, so the ACL's
+associations with objects will be unchanged.  The "ADMIN" ACL may not
+be renamed.  <id> may be either the current name or the numeric ID.
+<name> must not be all-numeric.  To rename an ACL, the current user
+must be authorized by the "ADMIN" ACL.
+
+=item acl replace <id> <new-id>
+
+Find any objects owned by <id>, and then change their ownership to
+<new_id> instead.  <new-id> should already exist, and may already have
+some objects owned by it.  <id> is not deleted afterwards, though in
+most cases that is probably your next step.  The "ADMIN" ACL may not
+be replaced from.  <id> and <new-id> may be either the current name or
+the numeric ID.  To replace an ACL, the current user must be
+authorized by the "ADMIN" ACL.
+
+=item acl show <id>
+
+Display the name, numeric ID, and entries of the ACL <id>.
+
+=item autocreate <type> <name>
+
+Create a new object of type <type> with name <name>.  The user must be
+listed in the default ACL for an object with that type and name, and
+the object will be created with that default ACL set as the object
+owner.
+
+Normally, there's no need to run this command directly.  It's
+automatically run when trying to get or store an object that doesn't
+already exist.
+
+=item check <type> <name>
+
+Check whether an object of type <type> and name <name> already exists.
+If it does, prints "yes"; if not, prints "no".
+
+=item comment <type> <name> [<comment>]
+
+If <comment> is not given, displays the current comment for the object
+identified by <type> and <name>, or "No comment set" if none is set.
+
+If <comment> is given, sets the comment on the object identified by
+<type> and <name> to <comment>.  If <comment> is the empty string,
+clears the comment.
+
+=item create <type> <name>
+
+Create a new object of type <type> with name <name>.  With some
+backends, this will trigger creation of an entry in an external system
+as well.  The new object will have no ACLs and no owner set, so
+usually the administrator will want to then set an owner with "owner"
+so that the object will be usable.
+
+=item destroy <type> <name>
+
+Destroy the object identified by <type> and <name>.  With some
+backends, this will trigger destruction of an object in an external
+system as well.
+
+=item expires <type> <name> [<expires>]
+
+If <expires> is not given, displays the current expiration of the
+object identified by <type> and <name>, or "No expiration set" if none
+is set.  The expiration will be displayed in seconds since epoch.
+
+If <expires> is given, sets the expiration on the object identified by
+<type> and <name> to that date (and optionally time).  <expires> must
+be in some format that can be parsed by the Perl Date::Parse module.
+Most common formats are supported; if in doubt, use "YYYY-MM-DD
+HH:MM:SS".  If <expires> is the empty string, clears the expiration of
+the object.
+
+Currently, the expiration of an object is not used.
+
+=item flag clear <type> <name> <flag>
+
+Clears the flag <flag> on the object identified by <type> and <name>.
+
+=item flag set <type> <name> <flag>
+
+Sets the flag <flag> on the object identified by <type> and <name>.
+Recognized flags are "locked", which prevents all further actions on
+that object until the flag is cleared, and "unchanging", which tells
+the object backend to not generate new data on get but instead return
+the same data as previously returned.  The "unchanging" flag is not
+meaningful for objects that do not generate new data on the fly.
+
+=item get <type> <name>
+
+Prints to standard output the data associated with the object
+identified by <type> and <name>, or stores it in a file if the -f
+option was given.  This may trigger generation of new data and
+invalidate old data for that object depending on the object type.
+
+If an object with type <type> and name <name> does not already exist
+when this command is issued (as checked with the check interface),
+wallet will attempt to automatically create it (using autocreate).
+
+=item getacl <type> <name> <acl>
+
+Prints the ACL <acl>, which must be one of "get", "store", "show",
+"destroy", or "flags", for the object identified by <type> and <name>.
+Prints "No ACL set" if that ACL isn't set on that object.  Remember
+that if the "get", "store", or "show" ACLs aren't set, authorization
+falls back to checking the owner ACL.  See the "owner" command for
+displaying or setting it.
+
+=item getattr <type> <name> <attr>
+
+Prints the object attribute <attr> for the object identified by <type>
+and <name>.  Attributes are used to store backend-specific information
+for a particular object type, and <attr> must be an attribute type
+known to the underlying object implementation.  The attribute values,
+if any, are printed one per line.  If the attribute is not set on this
+object, nothing is printed.
+
+=item history <type> <name>
+
+Displays the history for the object identified by <type> and <name>.
+This human-readable output will have two lines for each action that
+changes the object, plus for any get action.  The first line has the
+timestamp of the action and the action, and the second line gives the
+user who performed the action and the host from which they performed
+it.
+
+=item owner <type> <name> [<owner>]
+
+If <owner> is not given, displays the current owner ACL of the object
+identified by <type> and <name>, or "No owner set" if none is set.
+The result will be the name of an ACL.
+
+If <owner> is given, sets the owner of the object identified by
+<type> and <name> to <owner>.  If <owner> is the empty string,
+clears the owner of the object.
+
+=item setacl <type> <name> <acl> <id>
+
+Sets the ACL <acl>, which must be one of "get", "store", "show",
+"destroy", or "flags", to <id> on the object identified by <type> and
+<name>.  If <id> is the empty string, clears that ACL on the object.
+
+=item setattr <type> <name> <attr> <value> [<value> ...]
+
+Sets the object attribute <attr> for the object identified by <type>
+and <name>.  Attributes are used to store backend-specific information
+for a particular object type, and <attr> must be an attribute type
+known to the underlying object implementation.  To clear the attribute
+for this object, pass in a <value> of the empty string ('').
+
+=item show <type> <name>
+
+Displays the current object metadata for the object identified by
+<type> and <name>.  This human-readable output will show the object
+type and name, the owner, any specific ACLs set on the object, the
+expiration if any, and the user, remote host, and time when the object
+was created, last stored, and last downloaded.
+
+=item store <type> <name> [<data>]
+
+Stores <data> for the object identified by <type> and <name> for later
+retrieval with "get".  Not all object types support this.  If <data>
+is not specified on the command line, it will be read from the file
+specified with -f (if given) or from standard input.
+
+If an object with type <type> and name <name> does not already exist
+when this command is issued (as checked with the check interface),
+wallet will attempt to automatically create it (using autocreate).
+
+=item update <type> <name>
+
+Prints to standard output the data associated with the object
+identified by <type> and <name>, or stores it in a file if the -f
+option was given.  This will generate new data in the object, and only
+works for objects that support generating new data automatically, such
+as keytabs or passwords.  Types that do not support generating new
+data will fail and direct you to use get instead.
+
+If an object with type <type> and name <name> does not already exist
+when this command is issued (as checked with the check interface),
+wallet will attempt to automatically create it (using autocreate).
+
+=back
+
+=head1 ATTRIBUTES
+
+Object attributes store additional properties and configuration
+information for objects stored in the wallet.  They are displayed as
+part of the object data with "show", retrieved with "getattr", and set
+with "setattr".
+
+=head2 Keytab Attributes
+
+Keytab objects support the following attributes:
+
+=over 4
+
+=item enctypes
+
+Restricts the generated keytab to a specific set of encryption types.
+The values of this attribute must be enctype strings recognized by
+Kerberos (strings like "aes256-cts-hmac-sha1-96" or "des-cbc-crc").
+Note that the salt should not be included; since the salt is
+irrelevant for keytab keys, it will always be set to "normal" by the
+wallet.
+
+If this attribute is set, the specified enctype list will be passed to
+ktadd when get() is called for that keytab.  If it is not set, the
+default set in the KDC will be used.
+
+This attribute is ignored if the "unchanging" flag is set on a keytab.
+Keytabs retrieved with "unchanging" set will contain all keys present
+in the KDC for that Kerberos principal and therefore may contain
+different enctypes than those requested by this attribute.
+
+=back
+
+=head1 CONFIGURATION
+
+wallet can optionally be configured in the system krb5.conf.  It will
+read the default krb5.conf file for the Kerberos libraries with which
+it was compiled.  To set an option, put the option in the
+[appdefaults] section.  wallet will look for options either at the top
+level of the [appdefaults] section or in a subsection named "wallet".
+For example, the following fragment of a krb5.conf file would set the
+default port to 4373 and the default server to "wallet.example.org".
+
+        [appdefaults]
+            wallet_port = 4373
+            wallet = {
+                wallet_server = wallet.example.org
+            }
+
+The supported options are:
+
+=over 4
+
+=item wallet_principal
+
+The service principal of the wallet server.  The default is to use the
+"host" principal for the wallet server.  The principal chosen must
+match one of the keys in the keytab used by remctld on the wallet
+server.  The -k command-line option overrides this setting.
+
+=item wallet_port
+
+The port to connect to on the wallet server.  The default is the
+default remctl port.  The -p command-line option overrides this
+setting.
+
+=item wallet_server
+
+The wallet server to connect to.  The -s command-line option overrides
+this setting.  The default may be set when compiling the wallet
+client.  If it isn't, either -s must be given or this parameter must
+be present in in krb5.conf.
+
+=item wallet_type
+
+The command prefix (remctl type) to use.  Normally this is an internal
+implementation detail and the default ("wallet") should be fine.  It
+may sometimes be useful to use a different prefix for testing a
+different version of the wallet code on the server.  The -c
+command-line option overrides this setting.
+
+=back
+
+=head1 AUTHOR
+
+Bill MacAllister <whm@dropbox.com>
+
+=head1 COPYRIGHT
+
+Copyright (C) 2024, CZ Software <czsoftware@ca-zephyr.org>
+
+This code is free software; you can redistribute it and/or modify it
+under the same terms as Perl. For more details, see the full
+text of the at https://opensource.org/licenses/Artistic-2.0.
+
+This program is distributed in the hope that it will be
+useful, but without any warranty; without even the implied
+warranty of merchantability or fitness for a particular purpose.
+
+=cut

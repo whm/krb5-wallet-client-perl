@@ -1,0 +1,5 @@
+krb5-wallet-client-perl (1.2) unstable; urgency=medium
+
+  * Initial commit of a pure Perl wallet client.
+
+ -- Bill MacAllister <bill@ca-zephyr.org>  Wed, 05 Jun 2024 18:18:09 +0000

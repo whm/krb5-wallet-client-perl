@@ -1,0 +1,64 @@
+                     krb5-wallet-client-perl 1.2
+                   (secure data management system)
+         Maintained by Bill MacAllister <bill@ca-zephyr.org>
+         Copyright 2024 Bill MacAllister <bill@ca-zephyr.org>
+
+DESCRIPTION
+
+  The wallet is a system for managing secure data.  The wallet client
+  that is part of the krb5-wallet package is written in C.  Since
+  krb5-wallet is not available on all architectures the client is not
+  available for many systems.  This wallet client is a pure Perl
+  implementation of a wallet client and is available for any system
+  that supports perl and remctl-client.
+
+  This wallet client is a subset of the functionality available with
+  the C client.  Notably it overwrites keytab files when downloading
+  a keytab instead of adding the keytab to the existing keytab file.
+
+SOURCE REPOSITORY
+
+  krb5-wallet-client-perl wallet is maintained using Git.  You can
+  access the current source on GitHub at:
+
+      https://github.com/whm/krb5-wallet-client-perl
+
+LICENSE
+
+  The wallet package as a whole is covered by the following copyright
+  statement and license:
+
+    Copyright 2024, 2016, 2018 Bill MacAllister <bill@ca-zephyr.org>
+
+    Permission is hereby granted, free of charge, to any person obtaining
+    a copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be
+    included in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+    EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+  Some files in this distribution are individually released under
+  different licenses, all of which are compatible with the above general
+  package license but which may require preservation of additional
+  notices.  All required notices, and detailed information about the
+  licensing of each file, are recorded in the LICENSE file.
+
+  Files covered by a license with an assigned SPDX License Identifier
+  include SPDX-License-Identifier tags to enable automated processing of
+  license information.  See https://spdx.org/licenses/ for more
+  information.
+
+  For any copyright range specified by files in this package as YYYY-ZZZZ,
+  the range specifies every single year in that closed interval.

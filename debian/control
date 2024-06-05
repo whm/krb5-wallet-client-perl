@@ -1,0 +1,25 @@
+Source: krb5-wallet-client-perl
+Section: admin
+Priority: optional
+Maintainer: Bill MacAllister <bill@ca-zephyr.org>
+Build-Depends: debhelper (>= 13),
+ libappconfig-perl,
+ libgetopt-long-descriptive-perl,
+ libipc-run-perl,
+ perl,
+ perl-doc,
+ perltidy
+Standards-Version: 4.0.7.0
+
+Package: krb5-wallet-client-perl
+Architecture: all
+Depends: ${misc:Depends}, ${perl:Depends},
+ libappconfig-perl,
+ libgetopt-long-descriptive-perl,
+ libipc-run-perl,
+ perl-doc
+Conflicts: krb5-wallet-client, wallet-client
+Description: Wallet client written in Perl
+ This is a wallet client written in Perl.  It is useful for systems
+ for which the full krb5-wallet source has not been built.  This client
+ is a subset of the functionality available with the wallet C client.
